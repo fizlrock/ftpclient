@@ -1,79 +1,120 @@
 
-package Telnet;
+package test_ui_project.Models.Telnet;
 
 import java.io.*;
 import java.net.*;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.StringJoiner;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 
-public class TelnetController {
+public class FTPController {
 	private static String default_ip = "91.222.128.11";
 	private static int default_port = 21;
+
+	private String username;
+	private String password;
+
+	private StringJoiner logs;
 
 	private InetAddress server_adress;
 	private Socket server;
 	private BufferedReader in;
 	private PrintWriter out;
-	private ControllerState controller_state;
+	private ControllerState controllerState;
+
+	public ControllerState getControllerState() {
+		return controllerState;
+	}
+
+	public void setControllerState(ControllerState controller_state) {
+		this.controllerState = controller_state;
+	}
+
 	private ClientState client_state;
 
-	public TelnetController() throws IOException {
-
-		server_adress = InetAddress.getByName(default_ip);
-		controller_state = ControllerState.Waiting;
+	public FTPController(String ipAdress, String username, String password) {
+		logs = new StringJoiner("\n");
+		this.username = username;
+		this.password = password;
+		controllerState = ControllerState.Waiting;
 		client_state = ClientState.Null;
 
+		try {
+			server_adress = InetAddress.getByName(ipAdress);
+		} catch (UnknownHostException e) {
+			controllerState = ControllerState.Failed;
+			log(Arrays.toString(e.getStackTrace())); // Это не очень хорошо
+		}
+
 	}
 
-	public void connect() throws IOException {
-		controller_state = ControllerState.Connecting;
+	public void connect() {
+		controllerState = ControllerState.Connecting;
 		log("Запуск клиента. Сервер по умолчанию %s:%s", server_adress.getHostAddress(), default_port);
-		server = new Socket(server_adress, default_port);
+		try {
+			server = new Socket(server_adress, default_port);
+			if (server.isConnected())
+				log("Успешно подключён к серверу");
 
-		if (server.isConnected())
-			log("Успешно подключён к серверу");
+			in = new BufferedReader(new InputStreamReader(server.getInputStream()));
+			out = new PrintWriter(server.getOutputStream());
 
-		in = new BufferedReader(new InputStreamReader(server.getInputStream()));
-		out = new PrintWriter(server.getOutputStream());
+			controllerState = ControllerState.Connected;
+			client_state = ClientState.ConnectionConfirmation;
 
-		controller_state = ControllerState.Connected;
-		client_state = ClientState.ConnectionConfirmation;
+			confimConnect();
 
-		confimConnect();
+		} catch (IOException e) {
+			controllerFailed(Arrays.toString(e.getStackTrace())); // Это не очень хорошо
+		}
+
 	}
 
-	private void confimConnect() throws IOException {
+	private void confimConnect() {
 
-		Message m = getMessage();
-		if (m.getCode() == 220) {
-			log("Сервер подтвердил соединение: %s", m);
-			client_state = ClientState.Authorization;
-		} else {
-			log("Сервер не подтвердил соединение: %s. Ошибка", m);
-			server.close();
-			controller_state = ControllerState.Failed;
+		Message m;
+		try {
+			m = getMessage();
+			if (m.getCode() == 220) {
+				log("Сервер подтвердил соединение: %s", m);
+				client_state = ClientState.Authorization;
+			} else {
+				controllerFailed("Сервер не подтвердил соединение: %s. Ошибка", m);
+				server.close();
+			}
+		} catch (IOException e) {
+			controllerFailed("Ошибка подключения к серверу");
 		}
 	}
 
-	public void login() throws IOException {
-		if (controller_state == ControllerState.Connected && client_state == ClientState.Authorization) {
+	public void login() {
+		try {
+			login_nosafe();
+		} catch (IOException e) {
+			log(Arrays.toString(e.getStackTrace())); // Это не очень хорошо
+		}
+	}
+
+	private void login_nosafe() throws IOException {
+		if (controllerState == ControllerState.Connected && client_state == ClientState.Authorization) {
 			Message username_request, password_request;
 			log("Авторизация...");
-			sendMessage("USER testftp_guest");
+			sendMessage("USER " + username);
 			username_request = getMessage();
 
 			if (username_request.getCode() != 331) {
-				log("Ошибка ввода логина: %s", username_request);
+				controllerFailed("Ошибка ввода логина: %s", username_request);
 				return;
 			}
 
-			sendMessage("PASS 12345");
+			sendMessage("PASS " + password);
 			password_request = getMessage();
 
 			if (password_request.getCode() != 230) {
-				log("Ошибка ввода пароля: %s", password_request);
+				controllerFailed("Ошибка ввода пароля: %s", password_request);
 				return;
 			}
 
@@ -86,7 +127,7 @@ public class TelnetController {
 	public String[] getFilesList(String path) throws IOException {
 		String[] file_list = null;
 
-		if (!(controller_state == ControllerState.Connected &&
+		if (!(controllerState == ControllerState.Connected &&
 				client_state == ClientState.WaitingCommand))
 			return file_list;
 
@@ -113,7 +154,7 @@ public class TelnetController {
 			file_list = future.get();
 		} catch (InterruptedException | ExecutionException e) {
 			log("Ошибка чтений из потока данных");
-			controller_state = ControllerState.Failed;
+			controllerState = ControllerState.Failed;
 			e.printStackTrace();
 		}
 
@@ -121,7 +162,7 @@ public class TelnetController {
 
 	}
 
-	private static String[] readData(Message pasv_responce) throws UnknownHostException {
+	private String[] readData(Message pasv_responce) throws UnknownHostException {
 
 		ArrayList<String> lines = new ArrayList<String>();
 		int l, r;
@@ -169,15 +210,24 @@ public class TelnetController {
 		return port;
 	}
 
-	public void disconnect() throws IOException {
-		if (controller_state == ControllerState.Connected) {
-			sendMessage("quit");
-			getMessage();
-			controller_state = ControllerState.Disconnected;
+	public void disconnect() {
+		if (controllerState == ControllerState.Connected) {
+
+			try {
+				sendMessage("quit");
+				getMessage();
+
+				controllerState = ControllerState.Disconnected;
+
+			} catch (IOException e) {
+				log(Arrays.toString(e.getStackTrace())); // Это не очень хорошо
+			}
 		}
+
 	}
 
 	private void sendMessage(String message) {
+		log("Отправка сообщения: %s", message);
 		out.println(message);
 		out.flush();
 	}
@@ -196,11 +246,21 @@ public class TelnetController {
 		return m;
 	}
 
-	private static void log(String message, Object... args) {
+	private void log(String message, Object... args) {
 		System.out.printf(message + "\n", args);
+		logs.add(String.format(message, args));
 	}
 
-	enum ControllerState {
+	private void controllerFailed(String message, Object... args) {
+		log(message, args);
+		controllerState = ControllerState.Failed;
+	}
+
+	public String getLogs() {
+		return logs.toString();
+	}
+
+	public enum ControllerState {
 		Waiting, Connecting, Connected, Disconnected, Failed
 	}
 

@@ -1,6 +1,5 @@
 
-package Telnet;
-
+package test_ui_project.Models.Telnet;
 public class Message {
 	public Message(int code, String text) {
 		this.code = code;

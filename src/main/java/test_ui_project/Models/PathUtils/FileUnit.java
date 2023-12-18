@@ -1,8 +1,5 @@
+package test_ui_project.Models.PathUtils;
 
-package PathUtils;
-
-import java.net.URLConnection;
-import java.nio.file.Files;
 import java.util.Arrays;
 
 public class FileUnit {
@@ -80,10 +77,10 @@ public class FileUnit {
 	}
 
 	enum Icon {
-		IMAGE(" "),
-		DOCK("󰈙 "),
-		FOLDER(" "),
-		UNKNOWN(" ");
+		IMAGE("  "),
+		DOCK("󰈙  "),
+		FOLDER("  "),
+		UNKNOWN("  ");
 
 		public final String Emoji;
 
